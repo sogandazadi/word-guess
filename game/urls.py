@@ -1,7 +1,7 @@
 from django.urls import path
 from . import views
 from rest_framework_simplejwt.views import TokenObtainPairView, TokenRefreshView
-from .views import ActiveGamesView, CreateMultiPlayerGameView, CreateSinglePlayerGameView, FinishedGamesView, GameStatusView, JoinGameView, LeaderboardView, LogoutView, MyProfileView, PauseGameView, PausedGamesView, ResumeGameView, UseHintView, WaitingGamesView
+from .views import ActiveGamesView, CreateMultiPlayerGameView, CreateSinglePlayerGameView, FinishedGamesView, GameStatusView, JoinGameView, JoinableGamesView, LeaderboardView, LogoutView, MyProfileView, PauseGameView, PausedGamesView, ResumeGameView, UpdateAvatarView, UpdateEmailView, UpdatePasswordView, UpdateUsernameView, UseHintView, WaitingGamesView
 from .views import GuessLetterView
 from .views import PlayerGuessesView
 
@@ -25,5 +25,10 @@ urlpatterns = [
     path('leaderboard/', LeaderboardView.as_view(), name='leaderboard'),
     path('games/<int:game_id>/hint/', UseHintView.as_view(), name='use_hint'),
     path('logout/', LogoutView.as_view(), name='logout'),
+    path('profile/update-username/', UpdateUsernameView.as_view(), name='update-username'),
+    path('profile/update-email/', UpdateEmailView.as_view(), name='update-email'),
+    path('profile/update-password/', UpdatePasswordView.as_view(), name='update-password'),
+    path('profile/update-avatar/', UpdateAvatarView.as_view(), name='update-avatar'),
+    path('games/joinable/', JoinableGamesView.as_view(), name='joinable-games'),
 
 ]

@@ -1,31 +1,120 @@
+import re
 from rest_framework.views import APIView
 from rest_framework.response import Response
 from rest_framework import status
 from django.contrib.auth.models import User
 from rest_framework.exceptions import ValidationError
 from rest_framework import permissions, status
-from rest_framework.response import Response
-from rest_framework.views import APIView
 from .models import Game, PlayerGame, UserProfile, Word
 from .serializers import GameSerializer, UserProfileSerializer
 import random
 from rest_framework.permissions import IsAuthenticated
-from .models import Game, PlayerGame, Guess
 from django.utils import timezone
-import random
 from django.utils.timezone import now
 from django.db import models
 from .models import Game, PlayerGame, Guess, UserProfile
-
-
-
-
-
-from rest_framework.views import APIView
-from rest_framework.permissions import IsAuthenticated
-from rest_framework.response import Response
-from rest_framework import status
 from rest_framework_simplejwt.tokens import RefreshToken
+from django.db import transaction
+from rest_framework.parsers import MultiPartParser, FormParser
+import os
+from django.conf import settings
+
+    
+
+
+
+class JoinableGamesView(APIView):
+    permission_classes = [IsAuthenticated]
+
+    def get(self, request):
+        user = request.user
+        games = Game.objects.filter(status='waiting').exclude(created_by=user)
+        serializer = GameSerializer(games, many=True)
+        return Response(serializer.data)
+    
+
+class UpdateUsernameView(APIView):
+    permission_classes = [IsAuthenticated]
+
+    def patch(self, request):
+        new_username = request.data.get('username')
+        if not new_username:
+            return Response({'error': 'نام کاربری الزامی است.'}, status=status.HTTP_400_BAD_REQUEST)
+
+        if new_username == request.user.username:
+            return Response({'error': 'نام کاربری جدید نباید با قبلی یکسان باشد.'}, status=status.HTTP_400_BAD_REQUEST)
+
+        if User.objects.filter(username=new_username).exists():
+            return Response({'error': 'این نام کاربری قبلاً استفاده شده است.'}, status=status.HTTP_400_BAD_REQUEST)
+
+        request.user.username = new_username
+        request.user.save()
+        return Response({'message': 'نام کاربری با موفقیت به‌روزرسانی شد.'})    
+
+class UpdateEmailView(APIView):
+    permission_classes = [IsAuthenticated]
+
+    def patch(self, request):
+        new_email = request.data.get('email')
+        if not new_email:
+            return Response({'error': 'ایمیل الزامی است.'}, status=status.HTTP_400_BAD_REQUEST)
+
+        if new_email == request.user.email:
+            return Response({'error': 'ایمیل جدید نباید با ایمیل فعلی یکسان باشد.'}, status=status.HTTP_400_BAD_REQUEST)
+
+        if User.objects.filter(email=new_email).exists():
+            return Response({'error': 'این ایمیل قبلاً استفاده شده است.'}, status=status.HTTP_400_BAD_REQUEST)
+
+        request.user.email = new_email
+        request.user.save()
+        return Response({'message': 'ایمیل با موفقیت به‌روزرسانی شد.'})
+
+    
+class UpdatePasswordView(APIView):
+    permission_classes = [IsAuthenticated]
+
+    def patch(self, request):
+        new_password = request.data.get('password')
+        if not new_password:
+            return Response({'error': 'رمز عبور الزامی است.'}, status=status.HTTP_400_BAD_REQUEST)
+
+        if request.user.check_password(new_password):
+            return Response({'error': 'رمز عبور جدید نباید با رمز عبور فعلی یکسان باشد.'}, status=status.HTTP_400_BAD_REQUEST)
+
+        if len(new_password) < 8:
+            return Response({'error': 'رمز عبور باید حداقل ۸ کاراکتر داشته باشد.'}, status=status.HTTP_400_BAD_REQUEST)
+        if not re.search(r'\d', new_password):
+            return Response({'error': 'رمز عبور باید حداقل شامل یک عدد باشد.'}, status=status.HTTP_400_BAD_REQUEST)
+        if not re.search(r'[A-Za-z]', new_password):
+            return Response({'error': 'رمز عبور باید شامل حروف نیز باشد.'}, status=status.HTTP_400_BAD_REQUEST)
+
+        request.user.set_password(new_password)
+        request.user.save()
+        return Response({'message': 'رمز عبور با موفقیت به‌روزرسانی شد.'})
+
+    
+class UpdateAvatarView(APIView):
+    permission_classes = [IsAuthenticated]
+    parser_classes = [MultiPartParser, FormParser]
+
+    def patch(self, request):
+        profile, _ = UserProfile.objects.get_or_create(user=request.user)
+
+        new_avatar = request.FILES.get('avatar')
+        if not new_avatar:
+            return Response({'error': 'No avatar provided.'}, status=status.HTTP_400_BAD_REQUEST)
+
+
+        if profile.avatar and profile.avatar.name and 'default_avatar.png' not in profile.avatar.name:
+            old_avatar_path = os.path.join(settings.MEDIA_ROOT, profile.avatar.name)
+            if os.path.exists(old_avatar_path):
+                os.remove(old_avatar_path)
+
+        profile.avatar = new_avatar
+        profile.save()
+
+        return Response({'message': 'Avatar updated successfully.'})
+    
 
 class LogoutView(APIView):
     permission_classes = [IsAuthenticated]
@@ -38,6 +127,8 @@ class LogoutView(APIView):
             return Response({"message": "Logged out successfully."}, status=status.HTTP_205_RESET_CONTENT)
         except Exception as e:
             return Response({"error": "Invalid or missing refresh token."}, status=status.HTTP_400_BAD_REQUEST)
+        
+
 
 
 class MyProfileView(APIView):
@@ -47,7 +138,6 @@ class MyProfileView(APIView):
         profile, _ = UserProfile.objects.get_or_create(user=request.user)
         serializer = UserProfileSerializer(profile, context={'request': request})
         return Response(serializer.data)
-    
 
 
 class RegisterView(APIView):
@@ -55,43 +145,44 @@ class RegisterView(APIView):
         username = request.data.get("username")
         email = request.data.get("email")
         password = request.data.get("password")
+        avatar = request.FILES.get("avatar") 
+
 
         if not username or not email or not password:
             raise ValidationError("همه فیلدها الزامی هستند.")
 
+
         if User.objects.filter(username=username).exists():
             raise ValidationError("این نام کاربری قبلاً استفاده شده است.")
+        if User.objects.filter(email=email).exists():
+            raise ValidationError("این ایمیل قبلاً استفاده شده است.")
+        
+
+        if len(password) < 8:
+            raise ValidationError("پسورد باید حداقل ۸ کاراکتر باشد.")
+        if not re.search(r"[A-Z]", password):
+            raise ValidationError("پسورد باید حداقل یک حرف بزرگ داشته باشد.")
+        if not re.search(r"\d", password):
+            raise ValidationError("پسورد باید حداقل یک عدد داشته باشد.")
+
 
         user = User.objects.create_user(username=username, email=email, password=password)
+
+
+        profile = UserProfile.objects.create(user=user)
+        if avatar:
+            profile.avatar = avatar
+            profile.save()
+
         return Response({"message": "ثبت‌نام با موفقیت انجام شد!"}, status=status.HTTP_201_CREATED)
-
-# # تابع کمکی برای گرفتن کلمه تصادفی بر اساس سطح دشواری
-# def get_random_word(difficulty):
-#     easy_words = ['apple']
-#     # , 'bread', 'chair', 'dream', 'eagle'
-#     medium_words = ['python']
-#     # , 'jungle', 'market', 'garden', 'castle'
-#     hard_words = ['computer']
-#     # , 'elephant', 'structure', 'mountain', 'building'
-
-#     if difficulty == 'easy':
-#         return random.choice(easy_words)
-#     elif difficulty == 'medium':
-#         return random.choice(medium_words)
-#     else:
-#         return random.choice(hard_words)
     
 
-
-import random
 
 def get_random_word(difficulty):
     words = list(Word.objects.filter(difficulty=difficulty))
     if not words:
         return None
     return random.choice(words)
-
-
 
 class CreateMultiPlayerGameView(APIView):
     permission_classes = [permissions.IsAuthenticated]
@@ -115,10 +206,9 @@ class CreateMultiPlayerGameView(APIView):
             mode='multi'
         )
 
-        # 🔹 بازیکن اول رو می‌سازیم و در متغیر نگه می‌داریم
         pg = PlayerGame.objects.create(game=game, user=request.user, is_turn=True)
 
-        # 🔹 مقداردهی به current_turn
+
         game.current_turn = pg
         game.save()
 
@@ -144,19 +234,19 @@ class CreateSinglePlayerGameView(APIView):
             difficulty=difficulty,
             word=word,
             time_limit_minutes=time_limit,
-            status='active',  # بازی بلافاصله فعال می‌شود
+            status='active',
             mode='single',
             started_at=timezone.now()
         )
 
-        # ساخت بازیکن واقعی
+
         player_real = PlayerGame.objects.create(game=game, user=request.user, is_turn=True)
 
-        # ساخت بازیکن ربات (فرض کن username='bot' از قبل وجود دارد)
+
         try:
             bot_user = User.objects.get(username='bot')
         except User.DoesNotExist:
-            return Response({'error': 'Bot user not found'}, status=status.HTTP_500_INTERNAL_SERVER_ERROR)
+            return Response({'error': 'کاربر bot پیدا نشد'}, status=status.HTTP_500_INTERNAL_SERVER_ERROR)
 
         PlayerGame.objects.create(game=game, user=bot_user, is_turn=False)
 
@@ -166,12 +256,12 @@ class CreateSinglePlayerGameView(APIView):
         serializer = GameSerializer(game)
         return Response(serializer.data, status=status.HTTP_201_CREATED)
 
-    
 class LeaderboardView(APIView):
     permission_classes = [IsAuthenticated]
 
     def get(self, request):
-        top_users = UserProfile.objects.order_by('-score')[:10]
+        top_users = UserProfile.objects.exclude(user__username='bot').order_by('-score')[:10]
+
         data = [
             {
                 'username': profile.user.username,
@@ -182,37 +272,6 @@ class LeaderboardView(APIView):
         ]
         return Response(data)
 
-# class JoinGameView(APIView):
-#     permission_classes = [permissions.IsAuthenticated]
-
-#     def post(self, request, game_id):
-#         try:
-#             game = Game.objects.get(id=game_id)
-#         except Game.DoesNotExist:
-#             return Response({'error': 'Game not found'}, status=status.HTTP_404_NOT_FOUND)
-
-#         if game.status != 'waiting':
-#             return Response({'error': 'Cannot join this game'}, status=status.HTTP_400_BAD_REQUEST)
-
-#         if game.players.filter(user=request.user).exists():
-#             return Response({'error': 'You already joined this game'}, status=status.HTTP_400_BAD_REQUEST)
-
-#         PlayerGame.objects.create(game=game, user=request.user, is_turn=False)
-
-#         # وقتی بازیکن دوم اضافه شد، نوبت رو رندوم انتخاب کن
-#         players = list(game.players.all())
-#         random_player = random.choice(players)
-#         for player in players:
-#             player.is_turn = (player == random_player)
-#             player.save()
-
-#         game.status = 'active'
-#         game.started_at = timezone.now() 
-#         game.save()
-
-#         return Response({'message': 'Joined the game successfully'}, status=status.HTTP_200_OK)
-
-
 class JoinGameView(APIView):
     permission_classes = [permissions.IsAuthenticated]
 
@@ -220,21 +279,19 @@ class JoinGameView(APIView):
         try:
             game = Game.objects.get(id=game_id)
         except Game.DoesNotExist:
-            return Response({'error': 'Game not found'}, status=status.HTTP_404_NOT_FOUND)
+            return Response({'error': 'بازی پیدا نشد'}, status=status.HTTP_404_NOT_FOUND)
 
-        # اضافه کردن شرط برای اجازه join فقط در حالت multi
         if game.mode != 'multi':
-            return Response({'error': 'Cannot join a single-player game.'}, status=status.HTTP_400_BAD_REQUEST)
+            return Response({'error': 'نمی توان به بازی یک نفره اضافه شد'}, status=status.HTTP_400_BAD_REQUEST)
 
         if game.status != 'waiting':
-            return Response({'error': 'Cannot join this game'}, status=status.HTTP_400_BAD_REQUEST)
+            return Response({'error': 'نمی توان به بازی اضافه شد'}, status=status.HTTP_400_BAD_REQUEST)
 
         if game.players.filter(user=request.user).exists():
-            return Response({'error': 'You already joined this game'}, status=status.HTTP_400_BAD_REQUEST)
+            return Response({'error': 'شما از قبل به این بازی اضافه شده اید'}, status=status.HTTP_400_BAD_REQUEST)
 
         PlayerGame.objects.create(game=game, user=request.user, is_turn=False)
 
-        # وقتی بازیکن دوم اضافه شد، نوبت رو رندوم انتخاب کن
         players = list(game.players.all())
         random_player = random.choice(players)
         for player in players:
@@ -245,464 +302,16 @@ class JoinGameView(APIView):
         game.started_at = timezone.now() 
         game.save()
 
-        return Response({'message': 'Joined the game successfully'}, status=status.HTTP_200_OK)
-
-
-# class GuessLetterView(APIView):
-#     permission_classes = [IsAuthenticated]
-
-#     def post(self, request, game_id):
-#         letter = request.data.get('letter', '').lower()
-#         position = request.data.get('position')
-
-#         # اعتبارسنجی ورودی‌ها
-#         if not letter or len(letter) != 1 or not letter.isalpha():
-#             return Response({'error': 'You must guess a single letter.'}, status=400)
-
-#         try:
-#             position = int(position)
-#         except (TypeError, ValueError):
-#             return Response({'error': 'Position must be provided as an integer.'}, status=400)
-
-#         try:
-#             game = Game.objects.get(id=game_id)
-#         except Game.DoesNotExist:
-#             return Response({'error': 'Game not found.'}, status=404)
-
-#         if game.status != 'active':
-#             return Response({'error': 'Game is not active.'}, status=400)
-
-#         if not game.started_at:
-#             return Response({'error': 'Game has not started yet.'}, status=400)
-
-#         elapsed_minutes = (now() - game.started_at).total_seconds() / 60
-#         if elapsed_minutes > game.time_limit_minutes:
-#             game.status = 'finished'
-
-#             players = list(game.players.all())
-#             if len(players) == 2:
-#                 p1, p2 = players[0], players[1]
-#                 profile1, _ = UserProfile.objects.get_or_create(user=p1.user)
-#                 profile2, _ = UserProfile.objects.get_or_create(user=p2.user)
-
-#                 if p1.score > p2.score:
-#                     winner = p1
-#                     game.winner = winner.user
-#                     profile1.score += 5
-#                     profile1.save()
-#                     message = f"Time is up! Game finished. Winner is {winner.user.username}."
-#                 elif p1.score < p2.score:
-#                     winner = p2
-#                     game.winner = winner.user
-#                     profile2.score += 5
-#                     profile2.save()
-#                     message = f"Time is up! Game finished. Winner is {winner.user.username}."
-#                 else:
-#                     game.winner = None
-#                     profile1.score += 1
-#                     profile2.score += 1
-#                     profile1.save()
-#                     profile2.save()
-#                     message = "Time is up! Game finished. It's a tie!"
-#             else:
-#                 message = "Time is up! Game finished."
-
-#             game.save()
-#             return Response({'error': message, 'winner': game.winner.username if game.winner else 'tie'}, status=403)
-
-#         try:
-#             player_game = PlayerGame.objects.get(game=game, user=request.user)
-#         except PlayerGame.DoesNotExist:
-#             return Response({'error': 'You are not part of this game.'}, status=403)
-
-#         if not player_game.is_turn:
-#             return Response({'error': 'Not your turn.'}, status=403)
-
-#         if position < 0 or position >= len(game.word):
-#             return Response({'error': 'Position is out of range.'}, status=400)
-
-#         if Guess.objects.filter(player_game=player_game, position=position, is_correct=True).exists():
-#             return Response({'error': 'You already guessed the correct letter for this position.'}, status=400)
-
-#         is_correct = (letter == game.word[position].lower())
-
-#         Guess.objects.create(player_game=player_game, letter=letter, position=position, is_correct=is_correct)
-
-#         if is_correct:
-#             player_game.score += 20
-#         else:
-#             player_game.score -= 20
-#         player_game.save()
-
-#         guessed_positions = Guess.objects.filter(player_game=player_game, is_correct=True).values_list('position', flat=True)
-#         if set(range(len(game.word))) <= set(guessed_positions):
-#             game.status = 'finished'
-
-#             players = list(game.players.all())
-#             if len(players) == 2:
-#                 p1, p2 = players[0], players[1]
-#                 profile1, _ = UserProfile.objects.get_or_create(user=p1.user)
-#                 profile2, _ = UserProfile.objects.get_or_create(user=p2.user)
-
-#                 if p1.score > p2.score:
-#                     winner = p1
-#                     game.winner = winner.user
-#                     profile1.score += 5
-#                     profile1.save()
-#                     message = f"Correct guess! Game finished. Winner is {winner.user.username}."
-#                 elif p1.score < p2.score:
-#                     winner = p2
-#                     game.winner = winner.user
-#                     profile2.score += 5
-#                     profile2.save()
-#                     message = f"Correct guess! Game finished. Winner is {winner.user.username}."
-#                 else:
-#                     game.winner = None
-#                     profile1.score += 1
-#                     profile2.score += 1
-#                     profile1.save()
-#                     profile2.save()
-#                     message = "Correct guess! Game finished. It's a tie!"
-#             else:
-#                 message = "Correct guess! Game finished."
-
-#             game.save()
-#             return Response({'message': message, 'winner': game.winner.username if game.winner else None})
-
-#         players = list(game.players.all())
-#         for pg in players:
-#             pg.is_turn = (pg != player_game)
-#             pg.save()
-
-#         return Response({'message': 'Correct!' if is_correct else 'Wrong!', 'score': player_game.score})
-
-
-# class GuessLetterView(APIView):
-#     permission_classes = [IsAuthenticated]
-
-#     def post(self, request, game_id):
-#         letter = request.data.get('letter', '').lower()
-#         position = request.data.get('position')
-
-#         # اعتبارسنجی ورودی‌ها
-#         if not letter or len(letter) != 1 or not letter.isalpha():
-#             return Response({'error': 'You must guess a single letter.'}, status=400)
-
-#         try:
-#             position = int(position)
-#         except (TypeError, ValueError):
-#             return Response({'error': 'Position must be provided as an integer.'}, status=400)
-
-#         try:
-#             game = Game.objects.get(id=game_id)
-#         except Game.DoesNotExist:
-#             return Response({'error': 'Game not found.'}, status=404)
-
-#         if game.status != 'active':
-#             return Response({'error': 'Game is not active.'}, status=400)
-
-#         if not game.started_at:
-#             return Response({'error': 'Game has not started yet.'}, status=400)
-
-#         elapsed_minutes = (now() - game.started_at).total_seconds() / 60
-#         if elapsed_minutes > game.time_limit_minutes:
-#             game.status = 'finished'
-#             self._handle_game_finish(game)
-#             return Response({'error': 'Time is up! Game finished.', 'winner': game.winner.username if game.winner else 'tie'}, status=403)
-
-#         try:
-#             player_game = PlayerGame.objects.get(game=game, user=request.user)
-#         except PlayerGame.DoesNotExist:
-#             return Response({'error': 'You are not part of this game.'}, status=403)
-
-#         if not player_game.is_turn:
-#             return Response({'error': 'Not your turn.'}, status=403)
-
-#         if position < 0 or position >= len(game.word):
-#             return Response({'error': 'Position is out of range.'}, status=400)
-
-#         if Guess.objects.filter(player_game=player_game, position=position, is_correct=True).exists():
-#             return Response({'error': 'You already guessed the correct letter for this position.'}, status=400)
-
-#         is_correct = (letter == game.word[position].lower())
-
-#         Guess.objects.create(player_game=player_game, letter=letter, position=position, is_correct=is_correct)
-
-#         if is_correct:
-#             player_game.score += 20
-#         else:
-#             player_game.score -= 20
-#         player_game.save()
-
-#         guessed_positions = Guess.objects.filter(player_game=player_game, is_correct=True).values_list('position', flat=True)
-#         all_positions = set(range(len(game.word)))
-
-#         if set(guessed_positions) == all_positions:
-#             game.status = 'finished'
-#             self._handle_game_finish(game)
-#             return Response({'message': 'Correct guess! Game finished.', 'winner': game.winner.username if game.winner else None})
-
-#         # مدیریت نوبت و حدس ربات در بازی تک نفره
-#         if game.mode == 'multi':
-#             # تغییر نوبت بازیکنان چند نفره
-#             players = list(game.players.all())
-#             for pg in players:
-#                 pg.is_turn = (pg != player_game)
-#                 pg.save()
-#         else:
-#             # بازی تک نفره: بعد از بازیکن، نوبت ربات
-#             player_game.is_turn = False
-#             player_game.save()
-
-#             # حدس ربات (یک تابع ساده بنویس)
-#             bot_pg = PlayerGame.objects.filter(game=game, user__username='bot').first()
-#             if bot_pg and bot_pg.user.username == 'bot':
-#                 self._bot_guess(game, bot_pg)
-
-#             # نوبت بازیکن می‌شود
-#             player_game.is_turn = True
-#             player_game.save()
-
-#         return Response({'message': 'Correct!' if is_correct else 'Wrong!', 'score': player_game.score})
-
-#     def _handle_game_finish(self, game):
-#         players = list(game.players.all())
-#         if len(players) == 2:
-#             p1, p2 = players[0], players[1]
-#             profile1, _ = UserProfile.objects.get_or_create(user=p1.user)
-#             profile2, _ = UserProfile.objects.get_or_create(user=p2.user)
-
-#             if p1.score > p2.score:
-#                 winner = p1
-#                 game.winner = winner.user
-#                 profile1.score += 5
-#                 profile1.save()
-#             elif p1.score < p2.score:
-#                 winner = p2
-#                 game.winner = winner.user
-#                 profile2.score += 5
-#                 profile2.save()
-#             else:
-#                 game.winner = None
-#                 profile1.score += 1
-#                 profile2.score += 1
-#                 profile1.save()
-#                 profile2.save()
-#         else:
-#             game.winner = None
-
-#         game.save()
-
-#     def _bot_guess(self, game, bot_pg):
-#         # اینجا یه حدس ساده ربات رو بزار (مثلاً حدس حروف تصادفی که حدس زده نشده)
-#         guessed_letters = Guess.objects.filter(player_game__game=game).values_list('letter', flat=True)
-#         alphabet = set('abcdefghijklmnopqrstuvwxyz')
-#         remaining_letters = list(alphabet - set(guessed_letters))
-
-#         if not remaining_letters:
-#             return
-
-#         import random
-#         letter = random.choice(remaining_letters)
-
-#         # حدس ربات روی اولین موقعیت درست یا اولین موقعیت خالی
-#         word = game.word.lower()
-#         for pos, ch in enumerate(word):
-#             if ch == letter:
-#                 is_correct = True
-#                 break
-#         else:
-#             pos = 0
-#             is_correct = False
-
-#         Guess.objects.create(player_game=bot_pg, letter=letter, position=pos, is_correct=is_correct)
-#         if is_correct:
-#             bot_pg.score += 20
-#         else:
-#             bot_pg.score -= 20
-#         bot_pg.save()
-
-
-
-
-
-from rest_framework.views import APIView
-from rest_framework.permissions import IsAuthenticated
-from rest_framework.response import Response
-from rest_framework import status
-from django.utils.timezone import now
-from django.db import transaction
-import random
-
-# class GuessLetterView(APIView):
-#     permission_classes = [IsAuthenticated]
-
-#     def post(self, request, game_id):
-#         letter = request.data.get('letter', '').lower()
-#         position = request.data.get('position')
-
-#         # اعتبارسنجی ورودی‌ها
-#         validation = self._validate_input(letter, position)
-#         if 'error' in validation:
-#             return Response({'error': validation['error']}, status=validation['status'])
-
-#         letter = validation['letter']
-#         position = validation['position']
-
-#         # گرفتن بازی
-#         try:
-#             game = Game.objects.get(id=game_id)
-#         except Game.DoesNotExist:
-#             return Response({'error': 'Game not found.'}, status=404)
-
-#         # بررسی وضعیت بازی
-#         if game.status != 'active':
-#             return Response({'error': 'Game is not active.'}, status=400)
-
-#         if not game.started_at:
-#             return Response({'error': 'Game has not started yet.'}, status=400)
-
-#         elapsed_minutes = (now() - game.started_at).total_seconds() / 60
-#         if elapsed_minutes > game.time_limit_minutes:
-#             game.status = 'finished'
-#             self._handle_game_finish(game)
-#             return Response({'error': 'Time is up! Game finished.', 'winner': game.winner.username if game.winner else 'tie'}, status=403)
-
-#         # گرفتن بازیکن فعلی
-#         try:
-#             player_game = PlayerGame.objects.get(game=game, user=request.user)
-#         except PlayerGame.DoesNotExist:
-#             return Response({'error': 'You are not part of this game.'}, status=403)
-
-#         if not player_game.is_turn:
-#             return Response({'error': 'Not your turn.'}, status=403)
-
-#         if position < 0 or position >= len(game.word):
-#             return Response({'error': 'Position is out of range.'}, status=400)
-
-#         if Guess.objects.filter(player_game=player_game, position=position, is_correct=True).exists():
-#             return Response({'error': 'You already guessed the correct letter for this position.'}, status=400)
-
-#         # ثبت حدس
-#         is_correct = (letter == game.word[position].lower())
-#         with transaction.atomic():
-#             Guess.objects.create(player_game=player_game, letter=letter, position=position, is_correct=is_correct)
-
-#             if is_correct:
-#                 player_game.score += 20
-#             else:
-#                 player_game.score -= 20
-#             player_game.save()
-
-#         # بررسی تکمیل کلمه
-#         guessed_positions = Guess.objects.filter(player_game=player_game, is_correct=True).values_list('position', flat=True)
-#         all_positions = set(range(len(game.word)))
-
-#         if set(guessed_positions) == all_positions:
-#             game.status = 'finished'
-#             self._handle_game_finish(game)
-#             return Response({'message': 'Correct guess! Game finished.', 'winner': game.winner.username if game.winner else None})
-
-#         # تغییر نوبت و حدس ربات
-#         self._update_turn(game, player_game)
-
-#         return Response({'message': 'Correct!' if is_correct else 'Wrong!', 'score': player_game.score})
-
-
-#     def _validate_input(self, letter, position):
-#         if not letter or len(letter) != 1 or not letter.isalpha():
-#             return {'error': 'You must guess a single letter.', 'status': 400}
-#         try:
-#             position = int(position)
-#         except (TypeError, ValueError):
-#             return {'error': 'Position must be provided as an integer.', 'status': 400}
-#         return {'letter': letter.lower(), 'position': position}
-
-#     def _handle_game_finish(self, game):
-#         players = list(game.players.all())
-#         if len(players) == 2:
-#             p1, p2 = players[0], players[1]
-#             profile1, _ = UserProfile.objects.get_or_create(user=p1.user)
-#             profile2, _ = UserProfile.objects.get_or_create(user=p2.user)
-
-#             if p1.score > p2.score:
-#                 winner = p1
-#                 game.winner = winner.user
-#                 profile1.score += 5
-#                 profile1.save()
-#             elif p1.score < p2.score:
-#                 winner = p2
-#                 game.winner = winner.user
-#                 profile2.score += 5
-#                 profile2.save()
-#             else:
-#                 game.winner = None
-#                 profile1.score += 1
-#                 profile2.score += 1
-#                 profile1.save()
-#                 profile2.save()
-#         else:
-#             game.winner = None
-
-#         game.save()
-
-#     def _update_turn(self, game, current_player_game):
-#         if game.mode == 'multi':
-#             players = list(game.players.all())
-#             for pg in players:
-#                 pg.is_turn = (pg != current_player_game)
-#                 pg.save()
-#         else:
-#             # بازی تک نفره: نوبت بازیکن فعلی False می‌شود
-#             current_player_game.is_turn = False
-#             current_player_game.save()
-
-#             # حدس ربات
-#             bot_pg = PlayerGame.objects.filter(game=game, user__username='bot').first()
-#             if bot_pg:
-#                 self._bot_guess(game, bot_pg)
-
-#             # نوبت بازیکن می‌شود
-#             current_player_game.is_turn = True
-#             current_player_game.save()
-
-#     def _bot_guess(self, game, bot_pg):
-#         guessed_positions = Guess.objects.filter(player_game__game=game, is_correct=True).values_list('position', flat=True)
-#         word = game.word.lower()
-
-#         empty_positions = [i for i in range(len(word)) if i not in guessed_positions]
-
-#         if empty_positions:
-#             pos = random.choice(empty_positions)
-#             letter = word[pos]
-#             is_correct = True
-#         else:
-#             guessed_letters = Guess.objects.filter(player_game__game=game).values_list('letter', flat=True)
-#             alphabet = set('abcdefghijklmnopqrstuvwxyz')
-#             remaining_letters = list(alphabet - set(guessed_letters))
-
-#             if not remaining_letters:
-#                 return
-
-#             letter = random.choice(remaining_letters)
-#             pos = 0
-#             is_correct = (letter == word[pos])
-
-#         Guess.objects.create(player_game=bot_pg, letter=letter, position=pos, is_correct=is_correct)
-#         bot_pg.score += 20 if is_correct else -20
-#         bot_pg.save()
-
-
-
+        return Response({'message': 'با موفقیت به بازی اضافه شدید'}, status=status.HTTP_200_OK)
+    
 
 class GuessLetterView(APIView):
     permission_classes = [IsAuthenticated]
 
     def post(self, request, game_id):
-        letter = request.data.get('letter', '').lower()
+        letter = request.data.get('letter', '')
         position = request.data.get('position')
 
-        # اعتبارسنجی ورودی‌ها
         validation = self._validate_input(letter, position)
         if 'error' in validation:
             return Response({'error': validation['error']}, status=validation['status'])
@@ -710,44 +319,41 @@ class GuessLetterView(APIView):
         letter = validation['letter']
         position = validation['position']
 
-        # گرفتن بازی
         try:
             game = Game.objects.get(id=game_id)
         except Game.DoesNotExist:
-            return Response({'error': 'Game not found.'}, status=404)
+            return Response({'error': 'بازی پیدا نشد'}, status=404)
 
-        # بررسی وضعیت بازی
         if game.status != 'active':
-            return Response({'error': 'Game is not active.'}, status=400)
+            return Response({'error': 'بازی در حال انجام نیست'}, status=400)
 
         if not game.started_at:
-            return Response({'error': 'Game has not started yet.'}, status=400)
+            return Response({'error': 'بازی هنوز شروع نشده است'}, status=400)
 
         elapsed_minutes = (now() - game.started_at).total_seconds() / 60
         if elapsed_minutes > game.time_limit_minutes:
             game.status = 'finished'
             self._handle_game_finish(game)
-            return Response({'error': 'Time is up! Game finished.', 'winner': game.winner.username if game.winner else 'tie'}, status=403)
+            return Response({'error': 'زمان شما به پایان رسیده! بازی تمام شد', 'برنده': game.winner.username if game.winner else 'مساوی'}, status=403)
 
-        # گرفتن بازیکن فعلی
         try:
             player_game = PlayerGame.objects.get(game=game, user=request.user)
         except PlayerGame.DoesNotExist:
-            return Response({'error': 'You are not part of this game.'}, status=403)
+            return Response({'error': 'شما عضو این بازی نیستید'}, status=403)
 
         if not player_game.is_turn:
-            return Response({'error': 'Not your turn.'}, status=403)
+            return Response({'error': 'نوبت شما نیست'}, status=403)
 
-        word_text = game.word.word.lower()  # رشته کلمه واقعی
+        word_text = game.word.word
 
         if position < 0 or position >= len(word_text):
-            return Response({'error': 'Position is out of range.'}, status=400)
+            return Response({'error': 'جایگاه وارد شده معتبر نیست'}, status=400)
 
         if Guess.objects.filter(player_game=player_game, position=position, is_correct=True).exists():
-            return Response({'error': 'You already guessed the correct letter for this position.'}, status=400)
+            return Response({'error': 'برای این جایگاه قبلاً حدس درست وارد شده'}, status=400)
 
-        # ثبت حدس
-        is_correct = (letter == word_text[position])
+        is_correct = (letter.strip() == word_text[position].strip())
+
         with transaction.atomic():
             Guess.objects.create(player_game=player_game, letter=letter, position=position, is_correct=is_correct)
 
@@ -757,28 +363,26 @@ class GuessLetterView(APIView):
                 player_game.score -= 20
             player_game.save()
 
-        # بررسی تکمیل کلمه
         guessed_positions = Guess.objects.filter(player_game=player_game, is_correct=True).values_list('position', flat=True)
         all_positions = set(range(len(word_text)))
 
         if set(guessed_positions) == all_positions:
             game.status = 'finished'
             self._handle_game_finish(game)
-            return Response({'message': 'Correct guess! Game finished.', 'winner': game.winner.username if game.winner else None})
+            return Response({'message': 'تبریک! شما تمام کلمه را حدس زدید', 'برنده': game.winner.username if game.winner else None})
 
-        # تغییر نوبت و حدس ربات
         self._update_turn(game, player_game)
 
-        return Response({'message': 'Correct!' if is_correct else 'Wrong!', 'score': player_game.score})
+        return Response({'message': 'حدس درست بود!' if is_correct else 'حدس اشتباه بود!', 'امتیاز': player_game.score})
 
     def _validate_input(self, letter, position):
-        if not letter or len(letter) != 1 or not letter.isalpha():
-            return {'error': 'You must guess a single letter.', 'status': 400}
+        if not letter or len(letter.strip()) != 1 or not re.match(r'^[آ-ی]$', letter.strip()):
+            return {'error': 'شما باید یک حرف فارسی وارد کنید', 'status': 400}
         try:
             position = int(position)
         except (TypeError, ValueError):
-            return {'error': 'Position must be provided as an integer.', 'status': 400}
-        return {'letter': letter.lower(), 'position': position}
+            return {'error': 'جایگاه باید عدد صحیح باشد', 'status': 400}
+        return {'letter': letter.strip(), 'position': position}
 
     def _handle_game_finish(self, game):
         players = list(game.players.all())
@@ -788,21 +392,18 @@ class GuessLetterView(APIView):
             profile2, _ = UserProfile.objects.get_or_create(user=p2.user)
 
             if p1.score > p2.score:
-                winner = p1
-                game.winner = winner.user
+                game.winner = p1.user
                 profile1.score += 5
-                profile1.save()
-            elif p1.score < p2.score:
-                winner = p2
-                game.winner = winner.user
+            elif p2.score > p1.score:
+                game.winner = p2.user
                 profile2.score += 5
-                profile2.save()
             else:
                 game.winner = None
                 profile1.score += 1
                 profile2.score += 1
-                profile1.save()
-                profile2.save()
+
+            profile1.save()
+            profile2.save()
         else:
             game.winner = None
 
@@ -815,22 +416,19 @@ class GuessLetterView(APIView):
                 pg.is_turn = (pg != current_player_game)
                 pg.save()
         else:
-            # بازی تک نفره: نوبت بازیکن فعلی False می‌شود
             current_player_game.is_turn = False
             current_player_game.save()
 
-            # حدس ربات
             bot_pg = PlayerGame.objects.filter(game=game, user__username='bot').first()
             if bot_pg:
                 self._bot_guess(game, bot_pg)
 
-            # نوبت بازیکن می‌شود
             current_player_game.is_turn = True
             current_player_game.save()
 
     def _bot_guess(self, game, bot_pg):
         guessed_positions = Guess.objects.filter(player_game__game=game, is_correct=True).values_list('position', flat=True)
-        word_text = game.word.word.lower()
+        word_text = game.word.word
 
         empty_positions = [i for i in range(len(word_text)) if i not in guessed_positions]
 
@@ -840,21 +438,19 @@ class GuessLetterView(APIView):
             is_correct = True
         else:
             guessed_letters = Guess.objects.filter(player_game__game=game).values_list('letter', flat=True)
-            alphabet = set('abcdefghijklmnopqrstuvwxyz')
-            remaining_letters = list(alphabet - set(guessed_letters))
+            all_letters = set('اآبپتثجچحخدذرزژسشصضطظعغفقکگلمنوهی')
+            remaining_letters = list(all_letters - set(guessed_letters))
 
             if not remaining_letters:
                 return
 
             letter = random.choice(remaining_letters)
             pos = 0
-            is_correct = (letter == word_text[pos])
+            is_correct = (letter.strip() == word_text[pos].strip())
 
         Guess.objects.create(player_game=bot_pg, letter=letter, position=pos, is_correct=is_correct)
         bot_pg.score += 20 if is_correct else -20
         bot_pg.save()
-
-
 
 class PlayerGuessesView(APIView):
     permission_classes = [IsAuthenticated]
@@ -943,7 +539,7 @@ class FinishedGamesView(APIView):
         data = []
         for game in finished_games:
             player_scores = []
-            for pg in game.players.all():  # فرض بر اینه related_name='players' روی PlayerGame ست شده
+            for pg in game.players.all():  
                 player_scores.append({
                     'username': pg.user.username,
                     'score': pg.score
@@ -970,29 +566,29 @@ class PauseGameView(APIView):
         try:
             game = Game.objects.get(id=game_id)
         except Game.DoesNotExist:
-            return Response({'error': 'Game not found.'}, status=404)
+            return Response({'error': 'بازی پیدا نشد'}, status=404)
 
         try:
             player_game = PlayerGame.objects.get(game=game, user=request.user)
         except PlayerGame.DoesNotExist:
-            return Response({'error': 'You are not part of this game.'}, status=403)
+            return Response({'error': 'شما عضوی از این بازی نیستید'}, status=403)
 
-        # فقط بازیکنی که نوبتش هست می‌تونه پاز کنه
+
         if not player_game.is_turn:
-            return Response({'error': 'It is not your turn to pause the game.'}, status=403)
+            return Response({'error': 'نوبت شما نیست و نمی توانید بازی را متوقف کنید'}, status=403)
 
         if game.status != 'active':
-            return Response({'error': 'Game is not active.'}, status=400)
+            return Response({'error': 'بازی در حال انجام نیست'}, status=400)
 
         if game.paused_at is not None:
-            return Response({'error': 'Game is already paused.'}, status=400)
+            return Response({'error': 'بازی از قبل متوقف شده است'}, status=400)
 
-        # ثبت زمان توقف و تغییر وضعیت به paused
+
         game.paused_at = timezone.now()
         game.status = 'paused'
         game.save()
 
-        return Response({'message': 'Game paused successfully.'}, status=200)
+        return Response({'message': 'بازی با موفقیت متوقف شد'}, status=200)
     
 class ResumeGameView(APIView):
     permission_classes = [IsAuthenticated]
@@ -1001,24 +597,24 @@ class ResumeGameView(APIView):
         try:
             game = Game.objects.get(id=game_id)
         except Game.DoesNotExist:
-            return Response({'error': 'Game not found.'}, status=404)
+            return Response({'error': 'بازی پیدا نشد'}, status=404)
 
         try:
             player_game = PlayerGame.objects.get(game=game, user=request.user)
         except PlayerGame.DoesNotExist:
-            return Response({'error': 'You are not part of this game.'}, status=403)
+            return Response({'error': 'شما عضوی از این بازی نیستید'}, status=403)
 
-        # فقط بازیکنی که نوبتش هست می‌تونه بازی رو ادامه بده
+
         if not player_game.is_turn:
-            return Response({'error': 'It is not your turn to resume the game.'}, status=403)
+            return Response({'error': 'نوبت شما نیست و نمی توانید بازی را متوقف کنید'}, status=403)
 
         if game.status != 'paused':
-            return Response({'error': 'Game is not paused.'}, status=400)
+            return Response({'error': 'بازی متوقف نشده است'}, status=400)
 
         if game.paused_at is None:
-            return Response({'error': 'Game is not paused.'}, status=400)
+            return Response({'error': 'باز یمتوقف نشده است'}, status=400)
 
-        # محاسبه و اضافه کردن زمان توقف به started_at
+
         pause_duration = timezone.now() - game.paused_at
         if game.started_at:
             game.started_at += pause_duration
@@ -1027,7 +623,7 @@ class ResumeGameView(APIView):
         game.status = 'active'
         game.save()
 
-        return Response({'message': 'Game resumed successfully.'}, status=200)
+        return Response({'message': 'بازی با موفقیت متوقف شد'}, status=200)
 
 
 
@@ -1038,12 +634,12 @@ class GameStatusView(APIView):
         try:
             game = Game.objects.get(id=game_id)
         except Game.DoesNotExist:
-            return Response({'error': 'Game not found'}, status=404)
+            return Response({'error': 'یازس پسدا نشد'}, status=404)
 
         try:
             PlayerGame.objects.get(game=game, user=request.user)
         except PlayerGame.DoesNotExist:
-            return Response({'error': 'You are not part of this game.'}, status=403)
+            return Response({'error': 'شما عضو این بازی نیستید'}, status=403)
 
         guesses = Guess.objects.filter(player_game__game=game).order_by('guessed_at')
 
@@ -1068,7 +664,7 @@ class GameStatusView(APIView):
                 'guessed_at': guess.guessed_at,
             })
 
-        # محاسبه زمان باقی‌مانده
+
         elapsed = (now() - game.started_at).total_seconds() / 60 if game.started_at else 0
         remaining = max(game.time_limit_minutes - elapsed, 0)
 
@@ -1133,129 +729,57 @@ class WaitingGamesView(APIView):
         return Response({'waiting_games': data})
     
 
-
-
-
-# class UseHintView(APIView):
-#     permission_classes = [IsAuthenticated]
-
-#     def post(self, request, game_id):
-#         hint_type = request.data.get('hint_type')  # 'letter' یا 'description'
-#         if hint_type not in ['letter', 'description']:
-#             return Response({'error': 'Invalid hint type.'}, status=status.HTTP_400_BAD_REQUEST)
-
-#         try:
-#             game = Game.objects.get(id=game_id)
-#         except Game.DoesNotExist:
-#             return Response({'error': 'Game not found.'}, status=status.HTTP_404_NOT_FOUND)
-
-#         try:
-#             player_game = PlayerGame.objects.get(game=game, user=request.user)
-#         except PlayerGame.DoesNotExist:
-#             return Response({'error': 'You are not part of this game.'}, status=status.HTTP_403_FORBIDDEN)
-
-#         # چک نوبت
-#         if not player_game.is_turn:
-#             return Response({'error': 'It is not your turn.'}, status=status.HTTP_403_FORBIDDEN)
-
-#         # حداکثر دفعات استفاده از هینت‌ها:
-#         max_letter_hints = 2
-#         max_description_hints = 1
-
-#         if hint_type == 'letter':
-#             if player_game.letter_hints_used >= max_letter_hints:
-#                 return Response({'error': 'You have used all your letter hints.'}, status=status.HTTP_403_FORBIDDEN)
-#             if player_game.score < 20:
-#                 return Response({'error': 'Not enough score to use this hint.'}, status=status.HTTP_403_FORBIDDEN)
-
-#             # پیدا کردن اولین حرف درست حدس زده نشده
-#             word = game.word.word.lower()  # فرض بر اینکه مدل Word فیلد word دارد
-#             guessed_positions = Guess.objects.filter(player_game=player_game, is_correct=True).values_list('position', flat=True)
-#             remaining_positions = [i for i in range(len(word)) if i not in guessed_positions]
-#             if not remaining_positions:
-#                 return Response({'error': 'No hints available, word already guessed.'}, status=status.HTTP_400_BAD_REQUEST)
-
-#             hint_pos = remaining_positions[0]
-#             hint_letter = word[hint_pos]
-
-#             # کم کردن امتیاز و افزایش تعداد دفعات استفاده
-#             player_game.score -= 20
-#             player_game.letter_hints_used += 1
-#             player_game.save()
-
-#             return Response({'hint_type': 'letter', 'position': hint_pos, 'letter': hint_letter, 'score': player_game.score})
-
-#         else:  # hint_type == 'description'
-#             if player_game.description_hint_used:
-#                 return Response({'error': 'You have already used the description hint.'}, status=status.HTTP_403_FORBIDDEN)
-#             if player_game.score < 40:
-#                 return Response({'error': 'Not enough score to use this hint.'}, status=status.HTTP_403_FORBIDDEN)
-
-#             # کم کردن امتیاز و ثبت استفاده
-#             player_game.score -= 40
-#             player_game.description_hint_used = True
-#             player_game.save()
-
-#             # نمایش توضیح کلمه
-#             description = game.word.description  # فرض بر این است که مدل Word فیلد description دارد
-
-#             return Response({'hint_type': 'description', 'description': description, 'score': player_game.score})
-
-
-
 class UseHintView(APIView):
     permission_classes = [IsAuthenticated]
 
     def post(self, request, game_id):
-        hint_type = request.data.get('hint_type')  # 'letter' یا 'hint'
-        position = request.data.get('position')  # اختیاری برای hint_type == 'letter'
+        hint_type = request.data.get('hint_type')
+        position = request.data.get('position')
 
         if hint_type not in ['letter', 'hint']:
-            return Response({'error': 'Invalid hint type.'}, status=status.HTTP_400_BAD_REQUEST)
+            return Response({'error': 'نوع راهنما نامعتبر است'}, status=status.HTTP_400_BAD_REQUEST)
 
         try:
             game = Game.objects.get(id=game_id)
         except Game.DoesNotExist:
-            return Response({'error': 'Game not found.'}, status=status.HTTP_404_NOT_FOUND)
+            return Response({'error': 'بازی پیدا نشد'}, status=status.HTTP_404_NOT_FOUND)
 
         try:
             player_game = PlayerGame.objects.get(game=game, user=request.user)
         except PlayerGame.DoesNotExist:
-            return Response({'error': 'You are not part of this game.'}, status=status.HTTP_403_FORBIDDEN)
+            return Response({'error': 'شما عضو این بازی نیستید'}, status=status.HTTP_403_FORBIDDEN)
 
         if not player_game.is_turn:
-            return Response({'error': 'It is not your turn.'}, status=status.HTTP_403_FORBIDDEN)
+            return Response({'error': 'نوبت شما نیست'}, status=status.HTTP_403_FORBIDDEN)
 
-        max_hints_total = 2
-        if player_game.hints_used >= max_hints_total:
-            return Response({'error': 'You have used all your hints.'}, status=status.HTTP_403_FORBIDDEN)
+        if player_game.hints_used >= 2:
+            return Response({'error': 'شما از حداکثر تعداد راهنماها استفاده کرده‌اید'}, status=status.HTTP_403_FORBIDDEN)
 
         word_text = game.word.word.lower()
 
         if hint_type == 'letter':
-            if player_game.letter_hint_used:
-                return Response({'error': 'You have already used a letter hint.'}, status=status.HTTP_403_FORBIDDEN)
+            if player_game.letter_hint_used and player_game.hints_used >= 1:
+                return Response({'error': 'شما قبلاً از این نوع راهنما استفاده کرده‌اید'}, status=status.HTTP_403_FORBIDDEN)
 
             if player_game.score < 20:
-                return Response({'error': 'Not enough score to use this hint.'}, status=status.HTTP_403_FORBIDDEN)
+                return Response({'error': 'امتیاز کافی برای استفاده از این راهنما را ندارید'}, status=status.HTTP_403_FORBIDDEN)
 
             if position is None:
-                return Response({'error': 'Position is required for letter hint.'}, status=status.HTTP_400_BAD_REQUEST)
+                return Response({'error': 'برای راهنمای حرف باید جایگاه مشخص شود'}, status=status.HTTP_400_BAD_REQUEST)
 
             try:
                 position = int(position)
             except ValueError:
-                return Response({'error': 'Position must be an integer.'}, status=status.HTTP_400_BAD_REQUEST)
+                return Response({'error': 'جایگاه باید عدد باشد'}, status=status.HTTP_400_BAD_REQUEST)
 
             if position < 0 or position >= len(word_text):
-                return Response({'error': 'Invalid position.'}, status=status.HTTP_400_BAD_REQUEST)
+                return Response({'error': 'جایگاه وارد شده نامعتبر است'}, status=status.HTTP_400_BAD_REQUEST)
 
             if Guess.objects.filter(player_game=player_game, position=position, is_correct=True).exists():
-                return Response({'error': 'Letter at this position already guessed correctly.'}, status=status.HTTP_400_BAD_REQUEST)
+                return Response({'error': 'حرف این جایگاه قبلاً درست حدس زده شده است'}, status=status.HTTP_400_BAD_REQUEST)
 
             hint_letter = word_text[position]
 
-            # به‌روزرسانی وضعیت بازیکن
             player_game.score -= 20
             player_game.hints_used += 1
             player_game.letter_hint_used = True
@@ -1270,10 +794,10 @@ class UseHintView(APIView):
 
         else:  # hint_type == 'hint'
             if player_game.hint_used:
-                return Response({'error': 'You have already used the hint text.'}, status=status.HTTP_403_FORBIDDEN)
+                return Response({'error': 'شما قبلاً از راهنمای توضیحی استفاده کرده‌اید'}, status=status.HTTP_403_FORBIDDEN)
 
             if player_game.score < 30:
-                return Response({'error': 'Not enough score to use this hint.'}, status=status.HTTP_403_FORBIDDEN)
+                return Response({'error': 'امتیاز کافی برای استفاده از این راهنما را ندارید'}, status=status.HTTP_403_FORBIDDEN)
 
             player_game.score -= 30
             player_game.hints_used += 1

@@ -2,6 +2,7 @@ from rest_framework import serializers
 from django.contrib.auth.models import User
 from .models import Game, PlayerGame, Guess, Word
 from .models import UserProfile
+from django.conf import settings
 
 class UserSerializer(serializers.ModelSerializer):
     class Meta:
@@ -11,7 +12,7 @@ class UserSerializer(serializers.ModelSerializer):
 class WordSerializer(serializers.ModelSerializer):
     class Meta:
         model = Word
-        fields = ['word', 'description' , 'hint']  # کلمه و توضیحش
+        fields = ['word', 'description' , 'hint'] 
 
 class GameSerializer(serializers.ModelSerializer):
     created_by = UserSerializer(read_only=True)
@@ -33,10 +34,6 @@ class GuessSerializer(serializers.ModelSerializer):
         model = Guess
         fields = ['id', 'player_game', 'letter', 'is_correct', 'guessed_at']
 
-
-
-from django.conf import settings
-
 class UserProfileSerializer(serializers.ModelSerializer):
     username = serializers.CharField(source='user.username', read_only=True)
     rank = serializers.SerializerMethodField()
@@ -54,7 +51,7 @@ class UserProfileSerializer(serializers.ModelSerializer):
         if obj.avatar and hasattr(obj.avatar, 'url'):
             url = obj.avatar.url
         else:
-            url = settings.MEDIA_URL + 'media/avatars/default_avatar.png'  # آدرس عکس پیش‌فرض
+            url = settings.MEDIA_URL + 'media/avatars/default_avatar.png' 
 
         if request is not None:
             return request.build_absolute_uri(url)
