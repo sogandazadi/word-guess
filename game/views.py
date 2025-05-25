@@ -256,21 +256,46 @@ class CreateSinglePlayerGameView(APIView):
         serializer = GameSerializer(game)
         return Response(serializer.data, status=status.HTTP_201_CREATED)
 
+# class LeaderboardView(APIView):
+#     permission_classes = [IsAuthenticated]
+
+#     def get(self, request):
+#         top_users = UserProfile.objects.exclude(user__username='bot').order_by('-score')[:10]
+
+#         data = [
+#             {
+#                 'username': profile.user.username,
+#                 'score': profile.score,
+#                 'rank': profile.get_rank(),
+#             }
+#             for profile in top_users
+#         ]
+#         return Response(data)
+
+
+
 class LeaderboardView(APIView):
     permission_classes = [IsAuthenticated]
 
     def get(self, request):
         top_users = UserProfile.objects.exclude(user__username='bot').order_by('-score')[:10]
 
-        data = [
-            {
+        data = []
+        for profile in top_users:
+            if profile.avatar and hasattr(profile.avatar, 'url'):
+                avatar_url = request.build_absolute_uri(profile.avatar.url)
+            else:
+                avatar_url = request.build_absolute_uri(settings.MEDIA_URL + 'avatars/default_avatar.png')
+
+            data.append({
                 'username': profile.user.username,
                 'score': profile.score,
                 'rank': profile.get_rank(),
-            }
-            for profile in top_users
-        ]
+                'avatar_url': avatar_url,  
+            })
+
         return Response(data)
+
 
 class JoinGameView(APIView):
     permission_classes = [permissions.IsAuthenticated]
@@ -670,6 +695,7 @@ class GameStatusView(APIView):
 
         data = {
             'game_id': game.id,
+            'created_by': game.created_by.username,
             'word_length': len(game.word.word),
             'difficulty': game.difficulty,
             'status': game.status,
