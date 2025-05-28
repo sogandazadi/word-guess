@@ -298,31 +298,34 @@ class JoinGameView(APIView):
             return Response({'error': 'بازی پیدا نشد'}, status=status.HTTP_404_NOT_FOUND)
 
         if game.mode != 'multi':
-            return Response({'error': 'نمی توان به بازی یک نفره اضافه شد'}, status=status.HTTP_400_BAD_REQUEST)
+            return Response({'error': 'نمی‌توان به بازی یک‌نفره اضافه شد'}, status=status.HTTP_400_BAD_REQUEST)
 
         if game.status != 'waiting':
-            return Response({'error': 'نمی توان به بازی اضافه شد'}, status=status.HTTP_400_BAD_REQUEST)
+            return Response({'error': 'نمی‌توان به بازی اضافه شد'}, status=status.HTTP_400_BAD_REQUEST)
 
         if game.players.filter(user=request.user).exists():
-            return Response({'error': 'شما از قبل به این بازی اضافه شده اید'}, status=status.HTTP_400_BAD_REQUEST)
+            return Response({'error': 'شما از قبل به این بازی اضافه شده‌اید'}, status=status.HTTP_400_BAD_REQUEST)
 
         PlayerGame.objects.create(game=game, user=request.user, is_turn=False)
 
         if game.players.count() == 2:
             game.player_2 = game.players.exclude(user=game.created_by).first().user
+
+            players = list(game.players.all())
+            random_player = random.choice(players)
+
+            for player in players:
+                player.is_turn = (player == random_player)
+                player.save()
+
+            game.current_turn = random_player
+
+            game.status = 'active'
+            game.started_at = timezone.now()
             game.save()
 
-        players = list(game.players.all())
-        random_player = random.choice(players)
-        for player in players:
-            player.is_turn = (player == random_player)
-            player.save()
-
-        game.status = 'active'
-        game.started_at = timezone.now() 
-        game.save()
-
         return Response({'message': 'با موفقیت به بازی اضافه شدید'}, status=status.HTTP_200_OK)
+
     
 
 class GuessLetterView(APIView):
@@ -432,10 +435,18 @@ class GuessLetterView(APIView):
     def _update_turn(self, game, current_player_game):
         if game.mode == 'multi':
             players = list(game.players.all())
+            next_turn = None
             for pg in players:
                 pg.is_turn = (pg != current_player_game)
+                if pg.is_turn:
+                    next_turn = pg
                 pg.save()
-        else:
+
+            if next_turn:
+                game.current_turn = next_turn
+            game.save()
+
+        else:  
             current_player_game.is_turn = False
             current_player_game.save()
 
@@ -445,6 +456,9 @@ class GuessLetterView(APIView):
 
             current_player_game.is_turn = True
             current_player_game.save()
+
+            game.current_turn = current_player_game
+            game.save()
 
     def _bot_guess(self, game, bot_pg):
         guessed_positions = Guess.objects.filter(player_game__game=game, is_correct=True).values_list('position', flat=True)
