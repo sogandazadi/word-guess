@@ -51,7 +51,7 @@ class UserProfileSerializer(serializers.ModelSerializer):
         if obj.avatar and hasattr(obj.avatar, 'url'):
             url = obj.avatar.url
         else:
-            url = settings.MEDIA_URL + 'media/avatars/default_avatar.png' 
+            url = settings.MEDIA_URL + 'avatars/default_avatar.png' 
 
         if request is not None:
             return request.build_absolute_uri(url)

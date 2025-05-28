@@ -42,6 +42,7 @@ class Game(models.Model):
     ]
 
     created_by = models.ForeignKey(User, on_delete=models.CASCADE, related_name='created_games')
+    paused_by = models.ForeignKey(User, null=True, blank=True, on_delete=models.SET_NULL, related_name='paused_games')
     difficulty = models.CharField(max_length=10, choices=DIFFICULTY_CHOICES)
     word = models.ForeignKey(Word, on_delete=models.CASCADE)
     status = models.CharField(max_length=10, choices=STATUS_CHOICES, default='waiting')
@@ -60,6 +61,9 @@ class Game(models.Model):
     started_at = models.DateTimeField(null=True, blank=True)
     finished_at = models.DateTimeField(null=True, blank=True) 
     paused_at = models.DateTimeField(null=True, blank=True)   
+    player_1 = models.ForeignKey(User, on_delete=models.SET_NULL, null=True, blank=True, related_name='player_1_games')
+    player_2 = models.ForeignKey(User, on_delete=models.SET_NULL, null=True, blank=True, related_name='player_2_games')
+    
 
     def __str__(self):
         return f"Game #{self.id} ({self.difficulty}, {self.mode})"
@@ -99,21 +103,22 @@ class UserProfile(models.Model):
 
     def get_rank(self):
         if self.score < 20:
-            return "Neophyte"
+            return "تازه‌کار"
         elif self.score < 45:
-            return "Amateur"
+            return "مبتدی"
         elif self.score < 70:
-            return "Journeyman"
+            return "نیمه‌ماهر"
         elif self.score < 100:
-            return "Ace"
+            return "ماهر"
         elif self.score < 130:
-            return "Expert"
+            return "حرفه‌ای"
         elif self.score < 160:
-            return "Master"
+            return "استاد"
         elif self.score < 200:
-            return "Supreme"
+            return "برتر"
         else:
-            return "Ascendant"
+            return "افسانه‌ای"
+
 
     def __str__(self):
         return f"{self.user.username} - {self.get_rank()} ({self.score} pts)"

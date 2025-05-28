@@ -19,9 +19,6 @@ from rest_framework.parsers import MultiPartParser, FormParser
 import os
 from django.conf import settings
 
-    
-
-
 
 class JoinableGamesView(APIView):
     permission_classes = [IsAuthenticated]
@@ -30,8 +27,25 @@ class JoinableGamesView(APIView):
         user = request.user
         games = Game.objects.filter(status='waiting').exclude(created_by=user)
         serializer = GameSerializer(games, many=True)
-        return Response(serializer.data)
-    
+
+        data = serializer.data
+        for game, game_data in zip(games, data):
+            creator = game.created_by
+            username = creator.username
+
+            default_avatar_url = request.build_absolute_uri(settings.MEDIA_URL + 'avatars/default_avatar.png')
+            if hasattr(creator, 'userprofile') and creator.userprofile.avatar:
+                avatar_url = request.build_absolute_uri(creator.userprofile.avatar.url)
+            else:
+                avatar_url = default_avatar_url
+
+            game_data['created_by'] = {
+                'username': username,
+                'avatar': avatar_url
+            }
+
+        return Response(data)
+
 
 class UpdateUsernameView(APIView):
     permission_classes = [IsAuthenticated]
@@ -129,8 +143,6 @@ class LogoutView(APIView):
             return Response({"error": "Invalid or missing refresh token."}, status=status.HTTP_400_BAD_REQUEST)
         
 
-
-
 class MyProfileView(APIView):
     permission_classes = [IsAuthenticated]
 
@@ -139,35 +151,32 @@ class MyProfileView(APIView):
         serializer = UserProfileSerializer(profile, context={'request': request})
         return Response(serializer.data)
 
-
 class RegisterView(APIView):
     def post(self, request):
         username = request.data.get("username")
         email = request.data.get("email")
         password = request.data.get("password")
-        avatar = request.FILES.get("avatar") 
-
+        avatar = request.FILES.get("avatar")
 
         if not username or not email or not password:
-            raise ValidationError("همه فیلدها الزامی هستند.")
-
+            return Response({"error": "همه فیلدها الزامی هستند."}, status=status.HTTP_400_BAD_REQUEST)
 
         if User.objects.filter(username=username).exists():
-            raise ValidationError("این نام کاربری قبلاً استفاده شده است.")
+            return Response({"error": "این نام کاربری قبلاً استفاده شده است."}, status=status.HTTP_400_BAD_REQUEST)
+
         if User.objects.filter(email=email).exists():
-            raise ValidationError("این ایمیل قبلاً استفاده شده است.")
-        
+            return Response({"error": "این ایمیل قبلاً استفاده شده است."}, status=status.HTTP_400_BAD_REQUEST)
 
         if len(password) < 8:
-            raise ValidationError("پسورد باید حداقل ۸ کاراکتر باشد.")
-        if not re.search(r"[A-Z]", password):
-            raise ValidationError("پسورد باید حداقل یک حرف بزرگ داشته باشد.")
-        if not re.search(r"\d", password):
-            raise ValidationError("پسورد باید حداقل یک عدد داشته باشد.")
+            return Response({"error": "پسورد باید حداقل ۸ کاراکتر باشد."}, status=status.HTTP_400_BAD_REQUEST)
 
+        if not re.search(r"[A-Z]", password):
+            return Response({"error": "پسورد باید حداقل یک حرف بزرگ داشته باشد."}, status=status.HTTP_400_BAD_REQUEST)
+
+        if not re.search(r"\d", password):
+            return Response({"error": "پسورد باید حداقل یک عدد داشته باشد."}, status=status.HTTP_400_BAD_REQUEST)
 
         user = User.objects.create_user(username=username, email=email, password=password)
-
 
         profile = UserProfile.objects.create(user=user)
         if avatar:
@@ -176,7 +185,6 @@ class RegisterView(APIView):
 
         return Response({"message": "ثبت‌نام با موفقیت انجام شد!"}, status=status.HTTP_201_CREATED)
     
-
 
 def get_random_word(difficulty):
     words = list(Word.objects.filter(difficulty=difficulty))
@@ -190,7 +198,7 @@ class CreateMultiPlayerGameView(APIView):
     def post(self, request):
         difficulty = request.data.get('difficulty')
         if difficulty not in ['easy', 'medium', 'hard']:
-            return Response({'error': 'Invalid difficulty'}, status=status.HTTP_400_BAD_REQUEST)
+            return Response({'error': 'درجه سختی را اشتباه وارد کرده اید'}, status=status.HTTP_400_BAD_REQUEST)
 
         word = get_random_word(difficulty)
 
@@ -203,7 +211,9 @@ class CreateMultiPlayerGameView(APIView):
             word=word,
             time_limit_minutes=time_limit,
             status='waiting',
-            mode='multi'
+            mode='multi',
+            player_1=request.user,  
+            player_2=None            
         )
 
         pg = PlayerGame.objects.create(game=game, user=request.user, is_turn=True)
@@ -215,15 +225,13 @@ class CreateMultiPlayerGameView(APIView):
         serializer = GameSerializer(game)
         return Response(serializer.data, status=status.HTTP_201_CREATED)
     
-
-
 class CreateSinglePlayerGameView(APIView):
     permission_classes = [permissions.IsAuthenticated]
 
     def post(self, request):
         difficulty = request.data.get('difficulty')
         if difficulty not in ['easy', 'medium', 'hard']:
-            return Response({'error': 'Invalid difficulty'}, status=status.HTTP_400_BAD_REQUEST)
+            return Response({'error': 'درجه سختی را اشتباه وارد کرده اید'}, status=status.HTTP_400_BAD_REQUEST)
 
         word = get_random_word(difficulty)
         time_limits = {'easy': 3, 'medium': 2, 'hard': 5}
@@ -236,7 +244,9 @@ class CreateSinglePlayerGameView(APIView):
             time_limit_minutes=time_limit,
             status='active',
             mode='single',
-            started_at=timezone.now()
+            started_at=timezone.now(),
+            player_1=request.user,    
+            player_2=bot_user        
         )
 
 
@@ -255,24 +265,6 @@ class CreateSinglePlayerGameView(APIView):
 
         serializer = GameSerializer(game)
         return Response(serializer.data, status=status.HTTP_201_CREATED)
-
-# class LeaderboardView(APIView):
-#     permission_classes = [IsAuthenticated]
-
-#     def get(self, request):
-#         top_users = UserProfile.objects.exclude(user__username='bot').order_by('-score')[:10]
-
-#         data = [
-#             {
-#                 'username': profile.user.username,
-#                 'score': profile.score,
-#                 'rank': profile.get_rank(),
-#             }
-#             for profile in top_users
-#         ]
-#         return Response(data)
-
-
 
 class LeaderboardView(APIView):
     permission_classes = [IsAuthenticated]
@@ -316,6 +308,10 @@ class JoinGameView(APIView):
             return Response({'error': 'شما از قبل به این بازی اضافه شده اید'}, status=status.HTTP_400_BAD_REQUEST)
 
         PlayerGame.objects.create(game=game, user=request.user, is_turn=False)
+
+        if game.players.count() == 2:
+            game.player_2 = game.players.exclude(user=game.created_by).first().user
+            game.save()
 
         players = list(game.players.all())
         random_player = random.choice(players)
@@ -477,6 +473,7 @@ class GuessLetterView(APIView):
         bot_pg.score += 20 if is_correct else -20
         bot_pg.save()
 
+
 class PlayerGuessesView(APIView):
     permission_classes = [IsAuthenticated]
 
@@ -484,12 +481,12 @@ class PlayerGuessesView(APIView):
         try:
             game = Game.objects.get(id=game_id)
         except Game.DoesNotExist:
-            return Response({'error': 'Game not found.'}, status=404)
+            return Response({'error': 'بازی پیدا نشد'}, status=404)
 
         try:
             player_game = PlayerGame.objects.get(game=game, user=request.user)
         except PlayerGame.DoesNotExist:
-            return Response({'error': 'You are not part of this game.'}, status=403)
+            return Response({'error': 'شما عضوی از این بازی نیستید'}, status=403)
 
         guesses = Guess.objects.filter(player_game=player_game).order_by('guessed_at')
         data = []
@@ -530,14 +527,22 @@ class PausedGamesView(APIView):
                     'guessed_at': g.guessed_at,
                 } for g in guesses]
 
+                avatar_url = None
+                if hasattr(pg.user, 'userprofile') and pg.user.userprofile.avatar:
+                    avatar_url = request.build_absolute_uri(pg.user.userprofile.avatar.url)
+                else:
+                    avatar_url = request.build_absolute_uri(settings.MEDIA_URL + 'avatars/default_avatar.png')
+
                 players_data.append({
                     'username': pg.user.username,
                     'score': pg.score,
-                    'guesses': guesses_data
+                    'guesses': guesses_data,
+                    'avatar': avatar_url,
                 })
 
             data.append({
                 'game_id': game.id,
+                'paused_by': game.paused_by.username if game.paused_by else None,
                 'difficulty': game.difficulty,
                 'started_at': game.started_at,
                 'paused_at': game.paused_at,
@@ -546,8 +551,6 @@ class PausedGamesView(APIView):
             })
 
         return Response({'paused_games': data})
-
-    
 
 class FinishedGamesView(APIView):
     permission_classes = [IsAuthenticated]
@@ -565,9 +568,16 @@ class FinishedGamesView(APIView):
         for game in finished_games:
             player_scores = []
             for pg in game.players.all():  
+                # افزودن آواتار
+                if hasattr(pg.user, 'userprofile') and pg.user.userprofile.avatar:
+                    avatar_url = request.build_absolute_uri(pg.user.userprofile.avatar.url)
+                else:
+                    avatar_url = request.build_absolute_uri(settings.MEDIA_URL + 'avatars/default_avatar.png')
+
                 player_scores.append({
                     'username': pg.user.username,
-                    'score': pg.score
+                    'score': pg.score,
+                    'avatar': avatar_url
                 })
 
             data.append({
@@ -581,7 +591,6 @@ class FinishedGamesView(APIView):
             })
 
         return Response({'finished_games': data})
-    
     
 
 class PauseGameView(APIView):
@@ -650,8 +659,6 @@ class ResumeGameView(APIView):
 
         return Response({'message': 'بازی با موفقیت متوقف شد'}, status=200)
 
-
-
 class GameStatusView(APIView):
     permission_classes = [IsAuthenticated]
 
@@ -659,7 +666,7 @@ class GameStatusView(APIView):
         try:
             game = Game.objects.get(id=game_id)
         except Game.DoesNotExist:
-            return Response({'error': 'یازس پسدا نشد'}, status=404)
+            return Response({'error': 'بازی پیدا نشد'}, status=404)
 
         try:
             PlayerGame.objects.get(game=game, user=request.user)
@@ -670,11 +677,18 @@ class GameStatusView(APIView):
 
         players = game.players.all()
         players_data = []
+        default_avatar_url = request.build_absolute_uri(settings.MEDIA_URL + 'avatars/default_avatar.png')
+
         for pg in players:
+            avatar_url = default_avatar_url
+            if hasattr(pg.user, 'userprofile') and pg.user.userprofile.avatar:
+                avatar_url = request.build_absolute_uri(pg.user.userprofile.avatar.url)
+
             players_data.append({
                 'username': pg.user.username,
                 'score': pg.score,
                 'is_turn': pg.is_turn,
+                'avatar': avatar_url,
             })
 
         guesses_by_player = {}
@@ -689,7 +703,6 @@ class GameStatusView(APIView):
                 'guessed_at': guess.guessed_at,
             })
 
-
         elapsed = (now() - game.started_at).total_seconds() / 60 if game.started_at else 0
         remaining = max(game.time_limit_minutes - elapsed, 0)
 
@@ -697,6 +710,7 @@ class GameStatusView(APIView):
             'game_id': game.id,
             'created_by': game.created_by.username,
             'word_length': len(game.word.word),
+            'word_description': game.word.description,
             'difficulty': game.difficulty,
             'status': game.status,
             'time_limit_minutes': game.time_limit_minutes,
@@ -712,7 +726,6 @@ class GameStatusView(APIView):
             data['winner'] = game.winner.username if game.winner else 'draw'
 
         return Response(data)
-    
 
 
 class ActiveGamesView(APIView):
@@ -725,12 +738,40 @@ class ActiveGamesView(APIView):
             players__user=user
         ).distinct()
 
-        data = [{
-            'id': game.id,
-            'difficulty': game.difficulty,
-            'started_at': game.started_at,
-            'status': game.status,
-        } for game in active_games]
+        data = []
+        for game in active_games:
+            players_data = []
+
+            for pg in game.players.all():
+                if hasattr(pg.user, 'userprofile') and pg.user.userprofile.avatar:
+                    avatar_url = request.build_absolute_uri(pg.user.userprofile.avatar.url)
+                else:
+                    avatar_url = request.build_absolute_uri(settings.MEDIA_URL + 'avatars/default_avatar.png')
+
+                guesses = Guess.objects.filter(player_game=pg).order_by('guessed_at')
+
+                guesses_data = [{
+                    'letter': g.letter,
+                    'position': g.position,
+                    'is_correct': g.is_correct,
+                    'guessed_at': g.guessed_at,
+                } for g in guesses]
+
+                players_data.append({
+                    'username': pg.user.username,
+                    'score': pg.score,
+                    'guesses': guesses_data,
+                    'avatar': avatar_url  
+                })
+
+            data.append({
+                'id': game.id,
+                'difficulty': game.difficulty,
+                'started_at': game.started_at,
+                'status': game.status,
+                'players': players_data,
+                'is_turn': game.current_turn.user.username if game.current_turn else None
+            })
 
         return Response({'active_games': data})
     
@@ -750,10 +791,10 @@ class WaitingGamesView(APIView):
             'difficulty': game.difficulty,
             'created_at': game.created_at,
             'status': game.status,
+            'created_by': game.created_by.username  
         } for game in waiting_games]
 
         return Response({'waiting_games': data})
-    
 
 class UseHintView(APIView):
     permission_classes = [IsAuthenticated]
@@ -784,8 +825,6 @@ class UseHintView(APIView):
         word_text = game.word.word.lower()
 
         if hint_type == 'letter':
-            if player_game.letter_hint_used and player_game.hints_used >= 1:
-                return Response({'error': 'شما قبلاً از این نوع راهنما استفاده کرده‌اید'}, status=status.HTTP_403_FORBIDDEN)
 
             if player_game.score < 20:
                 return Response({'error': 'امتیاز کافی برای استفاده از این راهنما را ندارید'}, status=status.HTTP_403_FORBIDDEN)
@@ -818,7 +857,7 @@ class UseHintView(APIView):
                 'score': player_game.score
             })
 
-        else:  # hint_type == 'hint'
+        else:  
             if player_game.hint_used:
                 return Response({'error': 'شما قبلاً از راهنمای توضیحی استفاده کرده‌اید'}, status=status.HTTP_403_FORBIDDEN)
 
