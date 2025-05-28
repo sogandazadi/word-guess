@@ -202,7 +202,7 @@ class CreateMultiPlayerGameView(APIView):
 
         word = get_random_word(difficulty)
 
-        time_limits = {'easy': 3, 'medium': 2, 'hard': 5}
+        time_limits = {'easy': 10, 'medium': 7, 'hard': 5}
         time_limit = time_limits[difficulty]
 
         game = Game.objects.create(
@@ -231,11 +231,17 @@ class CreateSinglePlayerGameView(APIView):
     def post(self, request):
         difficulty = request.data.get('difficulty')
         if difficulty not in ['easy', 'medium', 'hard']:
-            return Response({'error': 'درجه سختی را اشتباه وارد کرده اید'}, status=status.HTTP_400_BAD_REQUEST)
+            return Response({'error': 'درجه سختی را اشتباه وارد کرده‌اید'}, status=status.HTTP_400_BAD_REQUEST)
 
         word = get_random_word(difficulty)
         time_limits = {'easy': 3, 'medium': 2, 'hard': 5}
         time_limit = time_limits[difficulty]
+
+        try:
+            bot_user = User.objects.get(username='bot')
+        except User.DoesNotExist:
+            return Response({'error': 'کاربر bot پیدا نشد'}, status=status.HTTP_500_INTERNAL_SERVER_ERROR)
+
 
         game = Game.objects.create(
             created_by=request.user,
@@ -245,19 +251,11 @@ class CreateSinglePlayerGameView(APIView):
             status='active',
             mode='single',
             started_at=timezone.now(),
-            player_1=request.user,    
-            player_2=bot_user        
+            player_1=request.user,
+            player_2=bot_user
         )
 
-
         player_real = PlayerGame.objects.create(game=game, user=request.user, is_turn=True)
-
-
-        try:
-            bot_user = User.objects.get(username='bot')
-        except User.DoesNotExist:
-            return Response({'error': 'کاربر bot پیدا نشد'}, status=status.HTTP_500_INTERNAL_SERVER_ERROR)
-
         PlayerGame.objects.create(game=game, user=bot_user, is_turn=False)
 
         game.current_turn = player_real
@@ -265,6 +263,7 @@ class CreateSinglePlayerGameView(APIView):
 
         serializer = GameSerializer(game)
         return Response(serializer.data, status=status.HTTP_201_CREATED)
+
 
 class LeaderboardView(APIView):
     permission_classes = [IsAuthenticated]
@@ -568,7 +567,6 @@ class FinishedGamesView(APIView):
         for game in finished_games:
             player_scores = []
             for pg in game.players.all():  
-                # افزودن آواتار
                 if hasattr(pg.user, 'userprofile') and pg.user.userprofile.avatar:
                     avatar_url = request.build_absolute_uri(pg.user.userprofile.avatar.url)
                 else:
@@ -620,6 +618,7 @@ class PauseGameView(APIView):
 
         game.paused_at = timezone.now()
         game.status = 'paused'
+        game.paused_by = request.user
         game.save()
 
         return Response({'message': 'بازی با موفقیت متوقف شد'}, status=200)
