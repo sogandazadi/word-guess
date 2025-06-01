@@ -18,14 +18,17 @@ from django.db import transaction
 from rest_framework.parsers import MultiPartParser, FormParser
 import os
 from django.conf import settings
-
+import json
 
 class JoinableGamesView(APIView):
     permission_classes = [IsAuthenticated]
 
     def get(self, request):
         user = request.user
-        games = Game.objects.filter(status='waiting').exclude(created_by=user)
+        games = Game.objects.filter(status='waiting') \
+                            .exclude(created_by=user) \
+                            .order_by('-created_at')  
+
         serializer = GameSerializer(games, many=True)
 
         data = serializer.data
@@ -45,8 +48,6 @@ class JoinableGamesView(APIView):
             }
 
         return Response(data)
-
-
 class UpdateUsernameView(APIView):
     permission_classes = [IsAuthenticated]
 
@@ -83,7 +84,6 @@ class UpdateEmailView(APIView):
         request.user.save()
         return Response({'message': 'ایمیل با موفقیت به‌روزرسانی شد.'})
 
-    
 class UpdatePasswordView(APIView):
     permission_classes = [IsAuthenticated]
 
@@ -430,6 +430,7 @@ class GuessLetterView(APIView):
         else:
             game.winner = None
 
+        game.finished_at = now()  
         game.save()
 
     def _update_turn(self, game, current_player_game):
@@ -486,7 +487,6 @@ class GuessLetterView(APIView):
         bot_pg.score += 20 if is_correct else -20
         bot_pg.save()
 
-
 class PlayerGuessesView(APIView):
     permission_classes = [IsAuthenticated]
 
@@ -524,7 +524,7 @@ class PausedGamesView(APIView):
             paused_at__isnull=False
         ).filter(
             models.Q(created_by=user) | models.Q(players__user=user)
-        ).distinct()
+        ).distinct().order_by('-paused_at')
 
         data = []
         for game in paused_games:
@@ -571,16 +571,25 @@ class FinishedGamesView(APIView):
     def get(self, request):
         user = request.user
 
+        now_time = now()
+        expired_games = Game.objects.filter(status='active', started_at__isnull=False)
+
+        for game in expired_games:
+            elapsed_minutes = (now_time - game.started_at).total_seconds() / 60
+            if elapsed_minutes > game.time_limit_minutes:
+                game.status = 'finished'
+                GuessLetterView()._handle_game_finish(game)
+
         finished_games = Game.objects.filter(
             status='finished'
         ).filter(
             models.Q(created_by=user) | models.Q(players__user=user)
-        ).distinct()
+        ).distinct().order_by('-finished_at')
 
         data = []
         for game in finished_games:
             player_scores = []
-            for pg in game.players.all():  
+            for pg in game.players.all():
                 if hasattr(pg.user, 'userprofile') and pg.user.userprofile.avatar:
                     avatar_url = request.build_absolute_uri(pg.user.userprofile.avatar.url)
                 else:
@@ -659,7 +668,7 @@ class ResumeGameView(APIView):
             return Response({'error': 'بازی متوقف نشده است'}, status=400)
 
         if game.paused_at is None:
-            return Response({'error': 'باز یمتوقف نشده است'}, status=400)
+            return Response({'error': 'بازی متوقف نشده است'}, status=400)
 
 
         pause_duration = timezone.now() - game.paused_at
@@ -670,7 +679,7 @@ class ResumeGameView(APIView):
         game.status = 'active'
         game.save()
 
-        return Response({'message': 'بازی با موفقیت متوقف شد'}, status=200)
+        return Response({'message': 'بازی با موفقیت شروع مجدد شد'}, status=200)
 
 class GameStatusView(APIView):
     permission_classes = [IsAuthenticated]
@@ -746,10 +755,21 @@ class ActiveGamesView(APIView):
 
     def get(self, request):
         user = request.user
+
+
+        now_time = now()
+        expired_games = Game.objects.filter(status='active', started_at__isnull=False)
+
+        for game in expired_games:
+            elapsed_minutes = (now_time - game.started_at).total_seconds() / 60
+            if elapsed_minutes > game.time_limit_minutes:
+                game.status = 'finished'
+                GuessLetterView()._handle_game_finish(game)
+
         active_games = Game.objects.filter(
             status='active',
             players__user=user
-        ).distinct()
+        ).distinct().order_by('-started_at')
 
         data = []
         for game in active_games:
@@ -797,17 +817,31 @@ class WaitingGamesView(APIView):
         waiting_games = Game.objects.filter(
             status='waiting',
             created_by=user
-        )
+        ).order_by('-created_at')
 
-        data = [{
-            'id': game.id,
-            'difficulty': game.difficulty,
-            'created_at': game.created_at,
-            'status': game.status,
-            'created_by': game.created_by.username  
-        } for game in waiting_games]
+        data = []
+        for game in waiting_games:
+            creator = game.created_by
+            default_avatar_url = request.build_absolute_uri(settings.MEDIA_URL + 'avatars/default_avatar.png')
+
+            if hasattr(creator, 'userprofile') and creator.userprofile.avatar:
+                avatar_url = request.build_absolute_uri(creator.userprofile.avatar.url)
+            else:
+                avatar_url = default_avatar_url
+
+            data.append({
+                'id': game.id,
+                'difficulty': game.difficulty,
+                'created_at': game.created_at,
+                'status': game.status,
+                'created_by': {
+                    'username': creator.username,
+                    'avatar': avatar_url
+                }
+            })
 
         return Response({'waiting_games': data})
+
 
 class UseHintView(APIView):
     permission_classes = [IsAuthenticated]
